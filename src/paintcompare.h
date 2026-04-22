@@ -229,32 +229,51 @@ static std::vector<float> moveBloomPixels(
     int height,
     const std::vector<cv::Vec2f>& offset
 ) {
-    std::vector<float> moved(static_cast<size_t>(width) * static_cast<size_t>(height), 0.0f);
+    cv::Mat movedMask(height, width, CV_8UC1, cv::Scalar(0));
 
-    for (int y = 0; y < height; ++y) {
-        for (int x = 0; x < width; ++x) {
-            const size_t idx = static_cast<size_t>(y) * static_cast<size_t>(width) + static_cast<size_t>(x);
+    for (int row = 0; row < height; ++row) {
+        for (int col = 0; col < width; ++col) {
+            const size_t idx = static_cast<size_t>(row) * static_cast<size_t>(width) + static_cast<size_t>(col);
             const float v = bloomPixels[idx];
             if (!std::isfinite(v)) continue;
             if (v < 0.5f) continue;
 
             const cv::Vec2f d = offset[idx];
-            const int xNew = std::clamp(
-                static_cast<int>(std::lround(static_cast<float>(y) - d[1])),
+            const int rowNew = std::clamp(
+                static_cast<int>(std::lround(static_cast<float>(row) - d[1])),
                 0,
                 height - 1
             );
-            const int yNew = std::clamp(
-                static_cast<int>(std::lround(static_cast<float>(x) + d[0])),
+            const int colNew = std::clamp(
+                static_cast<int>(std::lround(static_cast<float>(col) + d[0])),
                 0,
                 width - 1
             );
-            const size_t newIdx = static_cast<size_t>(xNew) * static_cast<size_t>(width) + static_cast<size_t>(yNew);
-            moved[newIdx] = 1.0f;
+
+            // 将起点到终点的位移路径一并填充，减小离散迁移导致的割裂断层。
+            cv::line(
+                movedMask,
+                cv::Point(col, row),
+                cv::Point(colNew, rowNew),
+                cv::Scalar(255),
+                1,
+                cv::LINE_8
+            );
         }
     }
 
-    // 保留原始无效区域，等效于 Python 版本对陆地/岛屿区域的处理。
+    // 小尺度闭运算，连接细小断缝但不过度扩张边界。
+    const cv::Mat kernel = cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(3, 3));
+    cv::morphologyEx(movedMask, movedMask, cv::MORPH_CLOSE, kernel, cv::Point(-1, -1), 1);
+
+    std::vector<float> moved(static_cast<size_t>(width) * static_cast<size_t>(height), 0.0f);
+    for (int row = 0; row < height; ++row) {
+        for (int col = 0; col < width; ++col) {
+            const size_t idx = static_cast<size_t>(row) * static_cast<size_t>(width) + static_cast<size_t>(col);
+            moved[idx] = (movedMask.at<unsigned char>(row, col) > 0) ? 1.0f : 0.0f;
+        }
+    }
+
     for (size_t i = 0; i < bloomPixels.size(); ++i) {
         if (!std::isfinite(bloomPixels[i])) {
             moved[i] = std::numeric_limits<float>::quiet_NaN();
@@ -394,8 +413,10 @@ static int runPaintCompare(
     forecastFrames.reserve(8);
     for (int h = 1; h <= 8; ++h) {
         const fs::path predPath = outputDir / ("bloom_" + std::to_string(h) + "h.png");
-        if (!cv::imwrite(predPath.string(), predictedImgs[static_cast<size_t>(h - 1)])) return 1;
-        forecastFrames.push_back(predictedImgs[static_cast<size_t>(h - 1)]);
+        cv::Mat labeled = predictedImgs[static_cast<size_t>(h - 1)].clone();
+        addPanelTitle(labeled, std::to_string(h) + " hour forecast");
+        if (!cv::imwrite(predPath.string(), labeled)) return 1;
+        forecastFrames.push_back(labeled);
     }
 
     const fs::path gridPath = outputDir / "bloom_forecast_grid.png";
