@@ -17,6 +17,7 @@ struct KeySite {
 	std::string name;
 	int col;
 	int row;
+	bool isWaterSource;
 	int firstPollutedHour;
 };
 
@@ -35,6 +36,34 @@ static bool isBloomPixel(const cv::Mat& image, int row, int col) {
 	const int g = static_cast<int>(px[1]);
 	const int r = static_cast<int>(px[2]);
 	return (g >= 100) && (g > b + 40) && (g > r + 40);
+}
+
+static bool hasBloomInRadius(
+	const cv::Mat& image,
+	int centerRow,
+	int centerCol,
+	int radius
+) {
+	if (image.empty()) return false;
+	if (image.type() != CV_8UC3) return false;
+	if (radius < 0) return false;
+
+	const int r0 = std::max(0, centerRow - radius);
+	const int r1 = std::min(image.rows - 1, centerRow + radius);
+	const int c0 = std::max(0, centerCol - radius);
+	const int c1 = std::min(image.cols - 1, centerCol + radius);
+	const int radiusSq = radius * radius;
+
+	for (int r = r0; r <= r1; ++r) {
+		for (int c = c0; c <= c1; ++c) {
+			const int dr = r - centerRow;
+			const int dc = c - centerCol;
+			if (dr * dr + dc * dc > radiusSq) continue;
+			if (isBloomPixel(image, r, c)) return true;
+		}
+	}
+
+	return false;
 }
 
 static cv::Ptr<cv::freetype::FreeType2> getChineseTextRenderer() {
@@ -136,13 +165,13 @@ static void drawWarningLinesBottomRight(cv::Mat& image, const std::vector<std::s
 
 static bool generateEarlyWarningForecastImages(const std::filesystem::path& outputDir) {
 	std::vector<KeySite> sites = {
-		{"沙渚水源地", 655, 334, -1},
-		{"太湖镇水源地", 758, 498, -1},
-		{"渔洋山水源地", 875, 741, -1},
-		{"七里观光堤", 361, 350, -1},
-		{"静山夕阳观景处", 651, 919, -1},
-		{"香山景区", 77, 878, -1},
-		{"太湖旅游度假区", 390, 1290, -1}
+		{"沙渚水源地", 655, 334, true, -1},
+		{"太湖镇水源地", 758, 498, true, -1},
+		{"渔洋山水源地", 875, 741, true, -1},
+		{"七里观光堤", 361, 350, false, -1},
+		{"静山夕阳观景处", 651, 919, false,-1},
+		{"香山景区", 77, 878, false, -1},
+		{"太湖旅游度假区", 390, 1290, false, -1}
 	};
 
 	std::array<cv::Mat, 8> forecastFrames;
@@ -156,7 +185,10 @@ static bool generateEarlyWarningForecastImages(const std::filesystem::path& outp
 
 		for (KeySite& site : sites) {
 			if (site.firstPollutedHour > 0) continue;
-			if (isBloomPixel(frame, site.row, site.col)) {
+			const bool pollutedNow = site.isWaterSource
+				? hasBloomInRadius(frame, site.row, site.col, 3)
+				: hasBloomInRadius(frame, site.row, site.col, 1);
+			if (pollutedNow) {
 				site.firstPollutedHour = h;
 				rollingWarnings.push({site.name, h});
 			}
