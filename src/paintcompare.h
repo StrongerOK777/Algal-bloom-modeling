@@ -2,6 +2,7 @@
 #define ALGAL_BLOOM_PAINTCOMPARE_H
 
 #include "test.h"
+#include "Earlywarning.h"
 
 #include <array>
 #include <cmath>
@@ -422,11 +423,15 @@ static int runPaintCompare(
     const fs::path gridPath = outputDir / "bloom_forecast_grid.png";
     if (!cv::imwrite(gridPath.string(), buildForecastGrid(forecastFrames))) return 1;
 
+    if (!EarlyWarning::generateEarlyWarningForecastImages(outputDir)) return 1;
+
     const fs::path gifPath = outputDir / "bloom_forecast.gif";
     const std::string gifCmd =
         "ffmpeg -y -framerate 1 -start_number 1 -i \"" + (outputDir / "bloom_%dh.png").string() +
         "\" -loop 0 \"" + gifPath.string() + "\" >/dev/null 2>&1";
     if (std::system(gifCmd.c_str()) != 0) return 1;
+
+    if (!EarlyWarning::generateEarlyWarningGif(outputDir)) return 1;
 
     return 0;
 }
