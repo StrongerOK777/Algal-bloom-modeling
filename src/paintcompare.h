@@ -121,6 +121,36 @@ static cv::Mat buildBloomMap(const std::vector<float>& ndvi, int width, int heig
     return out;
 }
 
+static std::vector<float> buildBloomBinaryFromNdvi(const std::vector<float>& ndvi) {
+    std::vector<float> out(ndvi.size(), 0.0f);
+    for (size_t i = 0; i < ndvi.size(); ++i) {
+        const float v = ndvi[i];
+        if (!std::isfinite(v)) {
+            out[i] = std::numeric_limits<float>::quiet_NaN();
+            continue;
+        }
+        out[i] = (v >= 0.0f) ? 1.0f : 0.0f;
+    }
+    return out;
+}
+
+static cv::Mat buildBloomMapFromBinary(const std::vector<float>& bloom, int width, int height) {
+    const cv::Vec3b water(255, 179, 128);  // BGR, 浅蓝
+    const cv::Vec3b algae(0, 128, 0);      // BGR, 绿色
+    cv::Mat out(height, width, CV_8UC3, water);
+
+    for (int y = 0; y < height; ++y) {
+        for (int x = 0; x < width; ++x) {
+            const size_t idx = static_cast<size_t>(y) * static_cast<size_t>(width) + static_cast<size_t>(x);
+            const float v = bloom[idx];
+            if (std::isfinite(v) && v >= 0.5f) {
+                out.at<cv::Vec3b>(y, x) = algae;
+            }
+        }
+    }
+    return out;
+}
+
 static void formatNdviPairForFlow(
     const std::vector<float>& ndvi0,
     const std::vector<float>& ndvi1,
@@ -193,6 +223,79 @@ static cv::Mat buildVectorOverlay(
     return canvas;
 }
 
+static std::vector<float> moveBloomPixels(
+    const std::vector<float>& bloomPixels,
+    int width,
+    int height,
+    const std::vector<cv::Vec2f>& offset
+) {
+    std::vector<float> moved(static_cast<size_t>(width) * static_cast<size_t>(height), 0.0f);
+
+    for (int y = 0; y < height; ++y) {
+        for (int x = 0; x < width; ++x) {
+            const size_t idx = static_cast<size_t>(y) * static_cast<size_t>(width) + static_cast<size_t>(x);
+            const float v = bloomPixels[idx];
+            if (!std::isfinite(v)) continue;
+            if (v < 0.5f) continue;
+
+            const cv::Vec2f d = offset[idx];
+            const int xNew = std::clamp(
+                static_cast<int>(std::lround(static_cast<float>(y) - d[1])),
+                0,
+                height - 1
+            );
+            const int yNew = std::clamp(
+                static_cast<int>(std::lround(static_cast<float>(x) + d[0])),
+                0,
+                width - 1
+            );
+            const size_t newIdx = static_cast<size_t>(xNew) * static_cast<size_t>(width) + static_cast<size_t>(yNew);
+            moved[newIdx] = 1.0f;
+        }
+    }
+
+    // 保留原始无效区域，等效于 Python 版本对陆地/岛屿区域的处理。
+    for (size_t i = 0; i < bloomPixels.size(); ++i) {
+        if (!std::isfinite(bloomPixels[i])) {
+            moved[i] = std::numeric_limits<float>::quiet_NaN();
+        }
+    }
+    return moved;
+}
+
+static void addPanelTitle(cv::Mat& img, const std::string& title) {
+    cv::putText(
+        img,
+        title,
+        cv::Point(20, 38),
+        cv::FONT_HERSHEY_SIMPLEX,
+        1.0,
+        cv::Scalar(0, 0, 0),
+        2,
+        cv::LINE_AA
+    );
+}
+
+static cv::Mat buildForecastGrid(const std::vector<cv::Mat>& frames) {
+    if (frames.empty()) return cv::Mat();
+
+    const int cols = 4;
+    const int rows = static_cast<int>((frames.size() + static_cast<size_t>(cols) - 1) / static_cast<size_t>(cols));
+    const int h = frames[0].rows;
+    const int w = frames[0].cols;
+
+    cv::Mat grid(h * rows, w * cols, frames[0].type(), cv::Scalar(255, 179, 128));
+    for (size_t i = 0; i < frames.size(); ++i) {
+        const int r = static_cast<int>(i) / cols;
+        const int c = static_cast<int>(i) % cols;
+        cv::Rect roi(c * w, r * h, w, h);
+        cv::Mat panel = frames[i].clone();
+        addPanelTitle(panel, std::to_string(i + 1) + " hour later");
+        panel.copyTo(grid(roi));
+    }
+    return grid;
+}
+
 static int runPaintCompare(
     const std::filesystem::path& outputDir = "./output",
     const std::string& gf1Path = "../Example/GeoTIFF_Landmasked/2021_05_30_10_38_06_GF1.tif",
@@ -242,7 +345,6 @@ static int runPaintCompare(
     std::vector<unsigned char> commonValid;
     formatNdviPairForFlow(ndvi0, ndvi1, width, height, prevU8, currU8, commonValid);
 
-    cv::Mat flowInit(height, width, CV_32FC2, cv::Scalar(0.0f, 0.0f));
     cv::Mat flow;
     cv::calcOpticalFlowFarneback(
         prevU8,
@@ -259,6 +361,51 @@ static int runPaintCompare(
 
     const fs::path vectorPath = outputDir / "vector.png";
     if (!cv::imwrite(vectorPath.string(), buildVectorOverlay(ndvi0, width, height, flow, commonValid))) return 1;
+
+    const std::vector<float> bloomTime1Binary = buildBloomBinaryFromNdvi(ndvi1);
+    const fs::path vectorBloomPath = outputDir / "vector_bloom.png";
+    if (!cv::imwrite(vectorBloomPath.string(), buildVectorOverlay(bloomTime1Binary, width, height, flow, commonValid))) return 1;
+
+    const float offsetScale = 3600.0f / 2141.0f;
+    std::vector<cv::Vec2f> baseOffset(pixelCount, cv::Vec2f(0.0f, 0.0f));
+    for (int y = 0; y < height; ++y) {
+        for (int x = 0; x < width; ++x) {
+            const size_t idx = static_cast<size_t>(y) * static_cast<size_t>(width) + static_cast<size_t>(x);
+            const cv::Vec2f f = flow.at<cv::Vec2f>(y, x);
+            baseOffset[idx][0] = f[0] * offsetScale;
+            baseOffset[idx][1] = -f[1] * offsetScale;
+        }
+    }
+
+    std::array<std::vector<float>, 8> predicted{};
+    std::array<cv::Mat, 8> predictedImgs;
+    for (int h = 1; h <= 8; ++h) {
+        std::vector<cv::Vec2f> offset(pixelCount, cv::Vec2f(0.0f, 0.0f));
+        for (size_t i = 0; i < pixelCount; ++i) {
+            offset[i][0] = std::round(baseOffset[i][0] * static_cast<float>(h));
+            offset[i][1] = std::round(baseOffset[i][1] * static_cast<float>(h));
+        }
+
+        predicted[static_cast<size_t>(h - 1)] = moveBloomPixels(bloomTime1Binary, width, height, offset);
+        predictedImgs[static_cast<size_t>(h - 1)] = buildBloomMapFromBinary(predicted[static_cast<size_t>(h - 1)], width, height);
+    }
+
+    std::vector<cv::Mat> forecastFrames;
+    forecastFrames.reserve(8);
+    for (int h = 1; h <= 8; ++h) {
+        const fs::path predPath = outputDir / ("bloom_" + std::to_string(h) + "h.png");
+        if (!cv::imwrite(predPath.string(), predictedImgs[static_cast<size_t>(h - 1)])) return 1;
+        forecastFrames.push_back(predictedImgs[static_cast<size_t>(h - 1)]);
+    }
+
+    const fs::path gridPath = outputDir / "bloom_forecast_grid.png";
+    if (!cv::imwrite(gridPath.string(), buildForecastGrid(forecastFrames))) return 1;
+
+    const fs::path gifPath = outputDir / "bloom_forecast.gif";
+    const std::string gifCmd =
+        "ffmpeg -y -framerate 1 -start_number 1 -i \"" + (outputDir / "bloom_%dh.png").string() +
+        "\" -loop 0 \"" + gifPath.string() + "\" >/dev/null 2>&1";
+    if (std::system(gifCmd.c_str()) != 0) return 1;
 
     return 0;
 }

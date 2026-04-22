@@ -216,3 +216,67 @@ def vector_plot(ndvi0, vector_filter):
     
 
 vector_plot(ndvi_time0, flow)
+
+
+bloom_time1 = ndvi_time1.copy()
+
+bloom_time1[ndvi_time1 >= 0] = 1   # NDVI >= 0的像素赋值1，也即藻华像素
+bloom_time1[ndvi_time1 < 0] = 0
+
+vector_plot(bloom_time1, flow)
+
+def move_bloom_pixels(bloom_pixels, flow):
+    """
+    bloom_pixels: 藻华像素矩阵
+    flow:         计算出的藻华漂移速度矢量
+    return:       根据漂移速度矢量，移动初始藻华像素矩阵，得到位置更新后的像素矩阵
+    """
+    bloom_pixels_new_position = np.zeros_like(bloom_pixels)  # 创建一个全是0的矩阵
+     
+    x, y = np.where(bloom_pixels == 1)   # 藻华像素的行列数
+    u = flow[0][bloom_pixels == 1]       # 藻华像素在x轴方向上移动的像素数
+    v = flow[1][bloom_pixels == 1]       # 藻华像素在y轴方向上移动的像素数
+    x_new = x - v   # 更新x轴方向上藻华像素的位置
+    y_new = y + u   # 更新y轴方向上藻华像素的位置
+    
+    # 限制新位置在有效范围内
+    x_new = np.clip(x_new, 0, bloom_pixels.shape[0] - 1)
+    y_new = np.clip(y_new, 0, bloom_pixels.shape[1] - 1)
+    
+    x_index = x_new.astype(int)   #  转换数据类型为int
+    y_index = y_new.astype(int)   #  转换数据类型为int
+    
+    bloom_pixels_new_position[x_index, y_index] = 1    # 位置更新后的藻华像素矩阵
+    
+    bloom_pixels_new_position[np.isnan(bloom_pixels)] = np.nan   # 陆地、岛屿区域赋值为nan
+    return bloom_pixels_new_position
+
+
+xy_offset_1hour = np.round(flow * 1 * 3600 / 50)  # 速度*时间/空间分辨率=移动的像素数
+xy_offset_2hour = np.round(flow * 2 * 3600 / 50)  # 速度*时间/空间分辨率=移动的像素数
+xy_offset_3hour = np.round(flow * 3 * 3600 / 50)  # 速度*时间/空间分辨率=移动的像素数
+xy_offset_4hour = np.round(flow * 4 * 3600 / 50)  # 速度*时间/空间分辨率=移动的像素数
+
+bloom_pixels_1hour = move_bloom_pixels(bloom_time1.copy(), xy_offset_1hour)
+bloom_pixels_2hour = move_bloom_pixels(bloom_time1.copy(), xy_offset_2hour)
+bloom_pixels_3hour = move_bloom_pixels(bloom_time1.copy(), xy_offset_3hour)
+bloom_pixels_4hour = move_bloom_pixels(bloom_time1.copy(), xy_offset_4hour)
+
+fig, ax = plt.subplots(2, 2, sharex=True, sharey=True)
+# 去除所有子图的横纵坐标轴
+for a in ax.flatten():
+    a.set_axis_off()
+    
+ax[0, 0].imshow(bloom_pixels_1hour, cmap=cmap)
+ax[0, 0].set_title('1 hour later')
+
+ax[0, 1].imshow(bloom_pixels_2hour, cmap=cmap)
+ax[0, 1].set_title('2 hour later')
+
+ax[1, 0].imshow(bloom_pixels_3hour, cmap=cmap)
+ax[1, 0].set_title('3 hour later')
+
+ax[1, 1].imshow(bloom_pixels_4hour, cmap=cmap)
+ax[1, 1].set_title('4 hour later')
+
+plt.show()
