@@ -106,6 +106,7 @@ static cv::Mat buildNdviPseudoColor(const std::vector<float>& ndvi, int width, i
 
 static cv::Mat buildBloomMap(const std::vector<float>& ndvi, int width, int height) {
     const cv::Vec3b water(255, 179, 128);  // BGR, 浅蓝
+    const cv::Vec3b land(255, 255, 255);   // BGR, 白色
     const cv::Vec3b bloom(0, 128, 0);      // BGR, 绿色
     cv::Mat out(height, width, CV_8UC3, water);
 
@@ -113,6 +114,10 @@ static cv::Mat buildBloomMap(const std::vector<float>& ndvi, int width, int heig
         for (int x = 0; x < width; ++x) {
             const size_t idx = static_cast<size_t>(y) * static_cast<size_t>(width) + static_cast<size_t>(x);
             const float v = ndvi[idx];
+            if (!std::isfinite(v)) {
+                out.at<cv::Vec3b>(y, x) = land;
+                continue;
+            }
             if (std::isfinite(v) && v >= 0.0f) {
                 out.at<cv::Vec3b>(y, x) = bloom;
             }
@@ -136,6 +141,7 @@ static std::vector<float> buildBloomBinaryFromNdvi(const std::vector<float>& ndv
 
 static cv::Mat buildBloomMapFromBinary(const std::vector<float>& bloom, int width, int height) {
     const cv::Vec3b water(255, 179, 128);  // BGR, 浅蓝
+    const cv::Vec3b land(255, 255, 255);   // BGR, 白色
     const cv::Vec3b algae(0, 128, 0);      // BGR, 绿色
     cv::Mat out(height, width, CV_8UC3, water);
 
@@ -143,6 +149,10 @@ static cv::Mat buildBloomMapFromBinary(const std::vector<float>& bloom, int widt
         for (int x = 0; x < width; ++x) {
             const size_t idx = static_cast<size_t>(y) * static_cast<size_t>(width) + static_cast<size_t>(x);
             const float v = bloom[idx];
+            if (!std::isfinite(v)) {
+                out.at<cv::Vec3b>(y, x) = land;
+                continue;
+            }
             if (std::isfinite(v) && v >= 0.5f) {
                 out.at<cv::Vec3b>(y, x) = algae;
             }
@@ -303,7 +313,7 @@ static cv::Mat buildForecastGrid(const std::vector<cv::Mat>& frames) {
     const int h = frames[0].rows;
     const int w = frames[0].cols;
 
-    cv::Mat grid(h * rows, w * cols, frames[0].type(), cv::Scalar(255, 179, 128));
+    cv::Mat grid(h * rows, w * cols, frames[0].type(), cv::Scalar(255, 255, 255));
     for (size_t i = 0; i < frames.size(); ++i) {
         const int r = static_cast<int>(i) / cols;
         const int c = static_cast<int>(i) % cols;

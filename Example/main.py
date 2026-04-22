@@ -78,6 +78,8 @@ bloom_time1 = ndvi_time1.copy()
 
 bloom_time0[ndvi_time0 >= 0] = 1   # NDVI >= 0的像素赋值1，也即藻华像素
 bloom_time1[ndvi_time1 >= 0] = 1   # NDVI >= 0的像素赋值1，也即藻华像素
+bloom_time0[ndvi_time0 < 0] = 0
+bloom_time1[ndvi_time1 < 0] = 0
 
 from matplotlib.colors import LinearSegmentedColormap
 
@@ -86,12 +88,13 @@ colors = [(0.5, 0.7, 1), (0, 0.5, 0)]  # 从浅蓝色到绿色
 
 # 创建颜色映射对象
 cmap = LinearSegmentedColormap.from_list('LightBlueToGreen', colors, N=256)
+cmap.set_bad(color='white')
 
 # 绘制两时刻藻华像素图像
 fig, ax = plt.subplots(1, 2, sharex=True, sharey=True)
 
-ax[0].imshow(bloom_time0, cmap=cmap)  # 绘制第一时刻图像,浅蓝色为水体，绿色为藻华，陆地区域同样设置为了浅蓝色
-ax[1].imshow(bloom_time1, cmap=cmap)  # 绘制第二时刻图像,浅蓝色为水体，绿色为藻华，陆地区域同样设置为了浅蓝色
+ax[0].imshow(bloom_time0, cmap=cmap)  # 绘制第一时刻图像,浅蓝色为水体，绿色为藻华，陆地区域为白色
+ax[1].imshow(bloom_time1, cmap=cmap)  # 绘制第二时刻图像,浅蓝色为水体，绿色为藻华，陆地区域为白色
 
 ax[0].axis('off')  # 取消横纵坐标
 ax[1].axis('off')  # 取消横纵坐标
